@@ -90,6 +90,8 @@ P.S. You can delete this when you're done too. It's your config now! :)
 vim.g.mapleader = " "
 vim.g.maplocalleader = " "
 vim.g.nofsync = true
+vim.opt.tabstop = 2
+vim.opt.shiftwidth = 2
 
 -- Set to true if you have a Nerd Font installed and selected in the terminal
 vim.g.have_nerd_font = true
@@ -143,7 +145,7 @@ vim.opt.splitbelow = true
 -- Sets how neovim will display certain whitespace characters in the editor.
 --  See `:help 'list'`
 --  and `:help 'listchars'`
-vim.opt.list = true
+vim.opt.list = false
 vim.opt.listchars = { tab = "» ", trail = "·", nbsp = "␣" }
 
 -- Preview substitutions live, as you type!
@@ -157,9 +159,25 @@ vim.opt.scrolloff = 10
 
 -- [[ Basic Keymaps ]]
 --  See `:help vim.keymap.set()`
+vim.keymap.set("v", "J", ":m '>+1<CR>gv=gv", { desc = "Multi-line move down" })
+vim.keymap.set("v", "K", ":m '<-2<CR>gv=gv", { desc = "Multi-line move up" })
+vim.keymap.set("x", "<leader>p", [["_dP]], { desc = "Paste without writing to paste buffer" })
+vim.keymap.set({ "n", "v" }, "<leader>y", [["+y]], { desc = "Yank to OS clipboard" })
+vim.keymap.set("n", "<leader>Y", [["+Y]], { desc = "Yank to OS clipboard" })
+vim.keymap.set("n", "<leader>j", "<cmd>lnext<CR>zz", { desc = "Quick-fix next" })
+vim.keymap.set("n", "<leader>k", "<cmd>lprev<CR>zz", { desc = "Quick-fix previous" })
 vim.keymap.set("n", "<leader>yp", function()
 	vim.fn.setreg("+", vim.fn.expand("%:p"))
 end, { desc = "Copy file path" })
+
+vim.keymap.set("n", "<leader>sc", function()
+	vim.cmd.Telescope("cmake_tools")
+end, { desc = "[S]earch [C]Make" })
+vim.cmd.nnoremap("<C-d>", "<C-d>zz")
+vim.cmd.nnoremap("<C-u>", "<C-u>zz")
+vim.cmd.nnoremap("n", "nzz")
+vim.cmd.nnoremap("N", "Nzz")
+vim.keymap.set("n", "<space>fb", ":Telescope file_browser path=%:p:h select_buffer=true<CR>")
 
 -- Set highlight on search, but clear on pressing <Esc> in normal mode
 vim.opt.hlsearch = true
@@ -170,6 +188,46 @@ vim.keymap.set("n", "[d", vim.diagnostic.goto_prev, { desc = "Go to previous [D]
 vim.keymap.set("n", "]d", vim.diagnostic.goto_next, { desc = "Go to next [D]iagnostic message" })
 vim.keymap.set("n", "<leader>e", vim.diagnostic.open_float, { desc = "Show diagnostic [E]rror messages" })
 vim.keymap.set("n", "<leader>q", vim.diagnostic.setloclist, { desc = "Open diagnostic [Q]uickfix list" })
+
+--vim.o.shell = "pwsh.exe"
+--vim.o.shellxquote = ""
+--vim.o.shellcmdflag = "-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command "
+--vim.o.shellquote = ""
+--vim.o.shellpipe = "| Out-File -Encoding UTF8 %s"
+--vim.o.shellredir = "| Out-File -Encoding UTF8 %s"
+
+--vim.keymap.set("n", "<space>mg", ":CMakeGenerate -G MinGW\\ Makefiles<CR>", { desc = "CMake Generate" })
+vim.keymap.set("n", "<space>mg", ":CMakeGenerate<CR>", { desc = "CMake Generate" })
+vim.keymap.set("n", "<space>mb", function()
+	vim.schedule(function()
+		vim.cmd("CMakeBuild")
+	end)
+	local uv = vim.loop
+
+	local handle = uv.new_fs_event()
+
+	-- these are just the default values
+	local flags = {
+		watch_entry = false, -- true = when dir, watch dir inode, not dir content
+		stat = false, -- true = don't use inotify/kqueue but periodic check, not implemented
+		recursive = false, -- true = watch dirs inside dirs
+	}
+
+	local unwatch_cb = function()
+		uv.fs_event_stop(handle)
+	end
+
+	local event_cb = function(err, filename, events)
+		vim.schedule(function()
+			vim.cmd("LspRestart")
+		end)
+		unwatch_cb()
+	end
+
+	-- attach handler
+	uv.fs_event_start(handle, "compile_commands.json", flags, event_cb)
+end, { desc = "CMake Build" })
+vim.keymap.set("n", "<space>mr", ":CMakeRun<CR>", { desc = "CMake Run" })
 
 -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
 -- for people to discover. Otherwise, you normally need to press <C-\><C-n>, which
@@ -193,6 +251,8 @@ vim.keymap.set("n", "<C-h>", "<C-w><C-h>", { desc = "Move focus to the left wind
 vim.keymap.set("n", "<C-l>", "<C-w><C-l>", { desc = "Move focus to the right window" })
 vim.keymap.set("n", "<C-j>", "<C-w><C-j>", { desc = "Move focus to the lower window" })
 vim.keymap.set("n", "<C-k>", "<C-w><C-k>", { desc = "Move focus to the upper window" })
+
+vim.keymap.set("x", "<leader>p", '"_dP')
 
 -- [[ Basic Autocommands ]]
 --  See `:help lua-guide-autocommands`
@@ -230,14 +290,22 @@ vim.opt.rtp:prepend(lazypath)
 -- NOTE: Here is where you install your plugins.
 require("lazy").setup({
 	-- NOTE: Plugins can be added with a link (or for a github repo: 'owner/repo' link).
-	"tpope/vim-sleuth", -- Detect tabstop and shiftwidth automatically
+	--"tpope/vim-sleuth", -- Detect tabstop and shiftwidth automatically
+	{
+		"akinsho/toggleterm.nvim",
+		version = "*",
+		config = true,
+		opts = { terminal = { keep_terminal_static_location = false, focus = true } },
+	},
 	{
 		"Civitasv/cmake-tools.nvim",
-		opts = {
-			cmake_build_directory = "build",
-			cmake_generate_options = { "-D", "CMAKE_EXPORT_COMPILE_COMMANDS=1" },
-		},
+		config = function()
+			require("cmake-tools").setup({
+				cmake_soft_link_compile_commands = true,
+			})
+		end,
 	},
+	{ "rmagatti/auto-session" },
 	-- NOTE: Plugins can also be added by using a table,
 	-- with the first argument being the link and the following
 	-- keys can be used to configure plugin behavior/loading/etc.
@@ -333,6 +401,7 @@ require("lazy").setup({
 				end,
 			},
 			{ "nvim-telescope/telescope-ui-select.nvim" },
+			{ "nvim-telescope/telescope-file-browser.nvim" },
 
 			-- Useful for getting pretty icons, but requires a Nerd Font.
 			{ "nvim-tree/nvim-web-devicons", enabled = vim.g.have_nerd_font },
@@ -375,7 +444,6 @@ require("lazy").setup({
 					},
 				},
 			})
-
 			-- Enable Telescope extensions if they are installed
 			pcall(require("telescope").load_extension, "fzf")
 			pcall(require("telescope").load_extension, "ui-select")
@@ -425,6 +493,7 @@ require("lazy").setup({
 			{ "williamboman/mason.nvim", config = true }, -- NOTE: Must be loaded before dependants
 			"williamboman/mason-lspconfig.nvim",
 			"WhoIsSethDaniel/mason-tool-installer.nvim",
+			{ "p00f/clangd_extensions.nvim" },
 
 			-- Useful status updates for LSP.
 			-- NOTE: `opts = {}` is the same as calling `require('fidget').setup({})`
@@ -435,6 +504,14 @@ require("lazy").setup({
 			{ "folke/neodev.nvim", opts = {} },
 		},
 		config = function()
+			require("lspconfig").clangd.setup({
+				on_new_config = function(new_config, new_cwd)
+					local status, cmake = pcall(require, "cmake-tools")
+					if status then
+						cmake.clangd_on_new_config(new_config)
+					end
+				end,
+			})
 			-- Brief aside: **What is LSP?**
 			--
 			-- LSP is an initialism you've probably heard, but might not understand what it is.
@@ -467,6 +544,8 @@ require("lazy").setup({
 			vim.api.nvim_create_autocmd("LspAttach", {
 				group = vim.api.nvim_create_augroup("kickstart-lsp-attach", { clear = true }),
 				callback = function(event)
+					require("clangd_extensions.inlay_hints").setup_autocmd()
+					require("clangd_extensions.inlay_hints").set_inlay_hints()
 					-- NOTE: Remember that Lua is a real programming language, and as such it is possible
 					-- to define small helper and utility functions so you don't have to repeat yourself.
 					--
@@ -856,6 +935,7 @@ require("lazy").setup({
 	},
 	{ -- Highlight, edit, and navigate code
 		"nvim-treesitter/nvim-treesitter",
+		dependencies = { "nvim-treesitter/nvim-treesitter-context" },
 		build = ":TSUpdate",
 		opts = {
 			prefer_git = true,
@@ -933,4 +1013,4 @@ require("lazy").setup({
 })
 
 -- The line beneath this is called `modeline`. See `:help modeline`
--
+-- vim: ts=2 sts=2 sw=2 et
