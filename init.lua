@@ -196,15 +196,28 @@ vim.keymap.set("n", "<leader>q", vim.diagnostic.setloclist, { desc = "Open diagn
 --vim.o.shellpipe = "| Out-File -Encoding UTF8 %s"
 --vim.o.shellredir = "| Out-File -Encoding UTF8 %s"
 
---vim.keymap.set("n", "<space>mg", ":CMakeGenerate -G MinGW\\ Makefiles<CR>", { desc = "CMake Generate" })
-vim.keymap.set("n", "<space>mg", ":CMakeGenerate<CR>", { desc = "CMake Generate" })
-vim.keymap.set("n", "<space>mb", function()
-	vim.schedule(function()
-		vim.cmd("CMakeBuild")
-	end)
+local function cmake_handle_compile_commands(command_to_run)
+	local compile_commands_path = require("cmake-tools").get_build_directory() .. "\\compile_commands.json"
+	local handle_name, err = io.open(compile_commands_path, "a+")
+	local compile_commands_path_patched = require("cmake-tools").get_build_directory() .. "\\compile_commands_swap.json"
+	local handle_name_patched, err_patched = io.open(compile_commands_path, "a+")
+
+	io.close(handle_name)
+	io.close(handle_name_patched)
+
+	local function swap_files()
+		local temp_name = os.tmpname()
+		os.rename(compile_commands_path, temp_name)
+		os.rename(compile_commands_path_patched, compile_commands_path)
+		os.rename(temp_name, compile_commands_path_patched)
+	end
+
+	swap_files()
+
 	local uv = vim.loop
 
 	local handle = uv.new_fs_event()
+	--local handle_patched = uv.new_fs_event()
 
 	-- these are just the default values
 	local flags = {
@@ -213,21 +226,45 @@ vim.keymap.set("n", "<space>mb", function()
 		recursive = false, -- true = watch dirs inside dirs
 	}
 
-	local unwatch_cb = function()
+	local event_cb_generate = function(err, filename, events)
 		uv.fs_event_stop(handle)
-	end
 
-	local event_cb = function(err, filename, events)
 		vim.schedule(function()
+			print("----------------------------GENERATING COMPILE COMMANDS----------------------------")
+
+			vim.api.nvim_exec("!compdb -p build\\ list -o " .. compile_commands_path_patched, true)
+			swap_files()
+
 			vim.cmd("LspRestart")
+			print("----------------------------FINISHED COMPILE COMMANDS----------------------------")
 		end)
-		unwatch_cb()
 	end
 
 	-- attach handler
-	uv.fs_event_start(handle, "compile_commands.json", flags, event_cb)
-end, { desc = "CMake Build" })
-vim.keymap.set("n", "<space>mr", ":CMakeRun<CR>", { desc = "CMake Run" })
+	uv.fs_event_start(handle, compile_commands_path, flags, event_cb_generate)
+
+	local event_cb_patch = function(err, filename, events)
+		--	uv.fs_event_stop(handle_patched)
+	end
+	vim.schedule(function()
+		vim.cmd(command_to_run)
+	end)
+	-- attach handler
+	--uv.fs_event_start(handle_patched, compile_commands_path_patched, flags, event_cb_patch)
+end
+vim.keymap.set("n", "<space>mg", function()
+	cmake_handle_compile_commands("CMakeGenerate -G Ninja")
+end, { desc = "CMake - generate" })
+vim.keymap.set("n", "<space>mb", function()
+	cmake_handle_compile_commands("CMakeBuild")
+end, { desc = "CMake - build" })
+vim.keymap.set("n", "<space>mr", function()
+	cmake_handle_compile_commands("CMakeRun")
+end, { desc = "CMake - run" })
+vim.keymap.set("n", "<space>md", function()
+	cmake_handle_compile_commands("CMakeDebug")
+end, { desc = "CMake - debug" })
+vim.keymap.set("n", "<space>mt", ":CMakeSelectBuildTarget<CR>", { desc = "CMake - select build target" })
 
 -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
 -- for people to discover. Otherwise, you normally need to press <C-\><C-n>, which
@@ -253,6 +290,15 @@ vim.keymap.set("n", "<C-j>", "<C-w><C-j>", { desc = "Move focus to the lower win
 vim.keymap.set("n", "<C-k>", "<C-w><C-k>", { desc = "Move focus to the upper window" })
 
 vim.keymap.set("x", "<leader>p", '"_dP')
+vim.keymap.set("n", "<leader>du", function()
+	require("dapui").toggle()
+end, { desc = "Debug - open UI" })
+
+vim.keymap.set("n", "<C-F5>", ":DapContinue<CR>", { desc = "Debug - continue" })
+vim.keymap.set("n", "<C-F9>", ":DapToggleBreakpoint<CR>", { desc = "Debug - breakpoint" })
+vim.keymap.set("n", "<C-F10>", ":DapStepOver<CR>", { desc = "Debug - step over" })
+vim.keymap.set("n", "<C-F11>", ":DapStepInto<CR>", { desc = "Debug - step into" })
+vim.keymap.set("n", "<S-F11>", ":DapStepOut<CR>", { desc = "Debug - step out" })
 
 -- [[ Basic Autocommands ]]
 --  See `:help lua-guide-autocommands`
@@ -294,18 +340,25 @@ require("lazy").setup({
 	{
 		"akinsho/toggleterm.nvim",
 		version = "*",
-		config = true,
-		opts = { terminal = { keep_terminal_static_location = false, focus = true } },
+		config = function() -- This is the function that runs, AFTER loading
+			require("toggleterm").setup()
+		end,
+
+		--opts = { terminal = { keep_terminal_static_location = false, focus = true } },
 	},
 	{
 		"Civitasv/cmake-tools.nvim",
 		config = function()
 			require("cmake-tools").setup({
-				cmake_soft_link_compile_commands = true,
+				cmake_build_directory = "build",
+				cmake_generate_options = { "-DCMAKE_EXPORT_COMPILE_COMMANDS=1" },
+				--cmake_runner = { -- runner to use
+				--name = "toggleterm", -- name of the runner
+				--},
 			})
 		end,
 	},
-	{ "rmagatti/auto-session" },
+
 	-- NOTE: Plugins can also be added by using a table,
 	-- with the first argument being the link and the following
 	-- keys can be used to configure plugin behavior/loading/etc.
@@ -459,7 +512,7 @@ require("lazy").setup({
 			vim.keymap.set("n", "<leader>sd", builtin.diagnostics, { desc = "[S]earch [D]iagnostics" })
 			vim.keymap.set("n", "<leader>sr", builtin.resume, { desc = "[S]earch [R]esume" })
 			vim.keymap.set("n", "<leader>s.", builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
-			vim.keymap.set("n", "<leader><leader>", builtin.buffers, { desc = "[ ] Find existing buffers" })
+			--vim.keymap.set("n", "<leader><leader>", builtin.buffers, { desc = "[ ] Find existing buffers" })
 
 			-- Slightly advanced example of overriding default behavior and theme
 			vim.keymap.set("n", "<leader>/", function()
@@ -486,6 +539,46 @@ require("lazy").setup({
 		end,
 	},
 
+	{
+		"ThePrimeagen/harpoon",
+		branch = "harpoon2",
+		dependencies = { "nvim-lua/plenary.nvim" },
+		config = function()
+			local harpoon = require("harpoon")
+
+			-- REQUIRED
+			harpoon:setup()
+			-- REQUIRED
+
+			vim.keymap.set("n", "<leader>ha", function()
+				harpoon:list():add()
+			end, { desc = "Harpoon - add" })
+			vim.keymap.set("n", "<leader><leader>", function()
+				harpoon.ui:toggle_quick_menu(harpoon:list())
+			end, { desc = "Harpoon - menu" })
+
+			vim.keymap.set("n", "<leader>hz", function()
+				harpoon:list():select(1)
+			end, { desc = "Harpoon - select 1" })
+			vim.keymap.set("n", "<leader>hx", function()
+				harpoon:list():select(2)
+			end, { desc = "Harpoon - select 2" })
+			vim.keymap.set("n", "<leader>hc", function()
+				harpoon:list():select(3)
+			end, { desc = "Harpoon - select 3" })
+			vim.keymap.set("n", "<leader>hv", function()
+				harpoon:list():select(4)
+			end, { desc = "Harpoon - select 4" })
+
+			-- Toggle previous & next buffers stored within Harpoon list
+			vim.keymap.set("n", "<C-S-P>", function()
+				harpoon:list():prev()
+			end, { desc = "Harpoon - previous" })
+			vim.keymap.set("n", "<C-S-N>", function()
+				harpoon:list():next()
+			end, { desc = "Harpoon - next" })
+		end,
+	},
 	{ -- LSP Configuration & Plugins
 		"neovim/nvim-lspconfig",
 		dependencies = {
@@ -493,6 +586,7 @@ require("lazy").setup({
 			{ "williamboman/mason.nvim", config = true }, -- NOTE: Must be loaded before dependants
 			"williamboman/mason-lspconfig.nvim",
 			"WhoIsSethDaniel/mason-tool-installer.nvim",
+			"hrsh7th/cmp-nvim-lsp-signature-help",
 			{ "p00f/clangd_extensions.nvim" },
 
 			-- Useful status updates for LSP.
@@ -504,14 +598,14 @@ require("lazy").setup({
 			{ "folke/neodev.nvim", opts = {} },
 		},
 		config = function()
-			require("lspconfig").clangd.setup({
+			--[[	require("lspconfig").clangd.setup({
 				on_new_config = function(new_config, new_cwd)
 					local status, cmake = pcall(require, "cmake-tools")
 					if status then
 						cmake.clangd_on_new_config(new_config)
 					end
 				end,
-			})
+			})]]
 			-- Brief aside: **What is LSP?**
 			--
 			-- LSP is an initialism you've probably heard, but might not understand what it is.
@@ -631,6 +725,9 @@ require("lazy").setup({
 							vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled())
 						end, "[T]oggle Inlay [H]ints")
 					end
+					--if client.server_capabilities.signatureHelpProvider then
+					--	require("lsp-overloads").setup(client, {})
+					--end
 				end,
 			})
 
@@ -648,7 +745,7 @@ require("lazy").setup({
 			--  So, we create new capabilities with nvim cmp, and then broadcast that to the servers.
 			local capabilities = vim.lsp.protocol.make_client_capabilities()
 			capabilities = vim.tbl_deep_extend("force", capabilities, require("cmp_nvim_lsp").default_capabilities())
-
+			capabilities.textDocument.completion.completionItem.snippetSupport = true
 			-- Enable the following language servers
 			--  Feel free to add/remove any LSPs that you want here. They will automatically be installed.
 			--
@@ -721,7 +818,37 @@ require("lazy").setup({
 			})
 		end,
 	},
+	{
+		"rcarriga/nvim-dap-ui",
+		dependencies = {
+			{
+				"mfussenegger/nvim-dap",
+				config = function()
+					local dap = require("dap")
+					dap.adapters.codelldb = {
+						type = "server",
+						host = "127.0.0.1",
+						port = 13000, -- 💀 Use the port printed out or specified with `--port`
+					}
+					dap.adapters.codelldb = {
+						type = "server",
+						port = "${port}",
+						executable = {
+							-- CHANGE THIS to your path!
+							command = "D:\\Downloads\\codelldb-x86_64-windows\\extension\\adapter\\codelldb",
+							args = { "--port", "${port}" },
 
+							-- On windows you may have to uncomment this:
+							--detached = false,
+						},
+					}
+					local dapui = require("dapui")
+					dapui.setup()
+				end,
+			},
+			"nvim-neotest/nvim-nio",
+		},
+	},
 	{ -- Autoformat
 		"stevearc/conform.nvim",
 		lazy = false,
@@ -741,7 +868,8 @@ require("lazy").setup({
 				-- Disable "format_on_save lsp_fallback" for languages that don't
 				-- have a well standardized coding style. You can add additional
 				-- languages here or re-enable it for the disabled ones.
-				local disable_filetypes = { c = true, cpp = true }
+				local disable_filetypes = {--[[ c = true, cpp = true --]]
+				}
 				return {
 					timeout_ms = 500,
 					lsp_fallback = not disable_filetypes[vim.bo[bufnr].filetype],
@@ -864,7 +992,9 @@ require("lazy").setup({
 				sources = {
 					{ name = "nvim_lsp" },
 					{ name = "luasnip" },
-					{ name = "path" },
+					--	{ name = "path" },
+					{ name = "nvim_lua" },
+					{ name = "nvim_lsp_signature_help" },
 				},
 			})
 		end,
@@ -967,7 +1097,14 @@ require("lazy").setup({
 			--    - Treesitter + textobjects: https://github.com/nvim-treesitter/nvim-treesitter-textobjects
 		end,
 	},
-
+	{ "lukas-reineke/indent-blankline.nvim", main = "ibl", opts = { indent = { char = "┆" } } },
+	{
+		"windwp/nvim-autopairs",
+		event = "InsertEnter",
+		config = true,
+		-- use opts = {} for passing setup options
+		-- this is equalent to setup({}) function
+	},
 	-- The following two comments only work if you have downloaded the kickstart repo, not just copy pasted the
 	-- init.lua. If you want these files, they are in the repository, so you can just download them and
 	-- place them in the correct locations.
