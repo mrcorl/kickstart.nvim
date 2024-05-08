@@ -196,74 +196,10 @@ vim.keymap.set("n", "<leader>q", vim.diagnostic.setloclist, { desc = "Open diagn
 --vim.o.shellpipe = "| Out-File -Encoding UTF8 %s"
 --vim.o.shellredir = "| Out-File -Encoding UTF8 %s"
 
-local function cmake_handle_compile_commands(command_to_run)
-	local compile_commands_path = require("cmake-tools").get_build_directory() .. "\\compile_commands.json"
-	local handle_name, err = io.open(compile_commands_path, "a+")
-	local compile_commands_path_patched = require("cmake-tools").get_build_directory() .. "\\compile_commands_swap.json"
-	local handle_name_patched, err_patched = io.open(compile_commands_path, "a+")
-
-	io.close(handle_name)
-	io.close(handle_name_patched)
-
-	local function swap_files()
-		local temp_name = os.tmpname()
-		os.rename(compile_commands_path, temp_name)
-		os.rename(compile_commands_path_patched, compile_commands_path)
-		os.rename(temp_name, compile_commands_path_patched)
-	end
-
-	swap_files()
-
-	local uv = vim.loop
-
-	local handle = uv.new_fs_event()
-	--local handle_patched = uv.new_fs_event()
-
-	-- these are just the default values
-	local flags = {
-		watch_entry = false, -- true = when dir, watch dir inode, not dir content
-		stat = false, -- true = don't use inotify/kqueue but periodic check, not implemented
-		recursive = false, -- true = watch dirs inside dirs
-	}
-
-	local event_cb_generate = function(err, filename, events)
-		uv.fs_event_stop(handle)
-
-		vim.schedule(function()
-			print("----------------------------GENERATING COMPILE COMMANDS----------------------------")
-
-			vim.api.nvim_exec("!compdb -p build\\ list -o " .. compile_commands_path_patched, true)
-			swap_files()
-
-			vim.cmd("LspRestart")
-			print("----------------------------FINISHED COMPILE COMMANDS----------------------------")
-		end)
-	end
-
-	-- attach handler
-	uv.fs_event_start(handle, compile_commands_path, flags, event_cb_generate)
-
-	local event_cb_patch = function(err, filename, events)
-		--	uv.fs_event_stop(handle_patched)
-	end
-	vim.schedule(function()
-		vim.cmd(command_to_run)
-	end)
-	-- attach handler
-	--uv.fs_event_start(handle_patched, compile_commands_path_patched, flags, event_cb_patch)
-end
-vim.keymap.set("n", "<space>mg", function()
-	cmake_handle_compile_commands("CMakeGenerate -G Ninja")
-end, { desc = "CMake - generate" })
-vim.keymap.set("n", "<space>mb", function()
-	cmake_handle_compile_commands("CMakeBuild")
-end, { desc = "CMake - build" })
-vim.keymap.set("n", "<space>mr", function()
-	cmake_handle_compile_commands("CMakeRun")
-end, { desc = "CMake - run" })
-vim.keymap.set("n", "<space>md", function()
-	cmake_handle_compile_commands("CMakeDebug")
-end, { desc = "CMake - debug" })
+vim.keymap.set("n", "<space>mg", ":CMakeGenerate -G Ninja<CR>", { desc = "CMake - generate" })
+vim.keymap.set("n", "<space>mb", ":CMakeBuild<CR>", { desc = "CMake - build" })
+vim.keymap.set("n", "<space>mr", ":CMakeRun<CR>", { desc = "CMake - run" })
+vim.keymap.set("n", "<space>md", ":CMakeDebug<CR>", { desc = "CMake - debug" })
 vim.keymap.set("n", "<space>mt", ":CMakeSelectBuildTarget<CR>", { desc = "CMake - select build target" })
 
 -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
@@ -352,9 +288,87 @@ require("lazy").setup({
 			require("cmake-tools").setup({
 				cmake_build_directory = "build",
 				cmake_generate_options = { "-DCMAKE_EXPORT_COMPILE_COMMANDS=1" },
-				--cmake_runner = { -- runner to use
-				--name = "toggleterm", -- name of the runner
-				--},
+				cmake_post_generate_compile_commands = function()
+					local handle = require("fidget").progress.handle.create({
+						title = "Generating compile commands",
+						lsp_client = { name = "clangd" },
+					})
+
+					local function copy_file(path_from, path_to)
+						local file_from = io.open(path_from, "r")
+						if file_from == nil then
+							return false
+						end
+
+						local file_to = io.open(path_to, "w")
+						if file_to == nil then
+							return false
+						end
+
+						local from_data = file_from:read("*a")
+						file_to:write(from_data)
+						file_from:close()
+						file_to:close()
+						return true
+					end
+
+					local cmake_build_dir = require("cmake-tools").get_build_directory()
+					local compile_commands_path = cmake_build_dir .. "\\compile_commands.json"
+					local compile_commands_path_original = cmake_build_dir .. "\\compile_commands_original.json"
+					local compile_commands_path_patched = cmake_build_dir .. "\\compile_commands_patched.json"
+
+					local commands_file = io.open(compile_commands_path, "r")
+					if commands_file == nil then
+						return
+					end
+
+					local commands_file_original = io.open(compile_commands_path_original, "a+")
+					assert(commands_file_original)
+
+					local commands_new = commands_file:read("*a")
+					local commands_old = commands_file_original:read("*a")
+
+					commands_file:close()
+					commands_file_original:close()
+
+					local requires_compile_patch = true
+
+					if commands_new == commands_old then
+						if copy_file(compile_commands_path_patched, compile_commands_path) then
+							vim.cmd("LspRestart")
+							handle:finish()
+							requires_compile_patch = false
+						end
+					end
+
+					if requires_compile_patch then
+						local Job = require("plenary.job")
+						Job:new({
+							command = "compdb",
+							args = { "-p", "build\\", "list", "-o", compile_commands_path_patched },
+							cwd = vim.loop.cwd(),
+							--on_stderr = function(err, data, j)
+							--	print(data)
+							--end,
+							--on_stdout = function(err, data, j)
+							--  print(data)
+							--end,
+							on_exit = function(j, return_val)
+								if return_val == 0 then
+									vim.schedule(function()
+										copy_file(compile_commands_path, compile_commands_path_original)
+										copy_file(compile_commands_path_patched, compile_commands_path)
+
+										vim.cmd("LspRestart")
+										handle:finish()
+									end)
+								end
+								--print(return_val)
+								--print(j:result())
+							end,
+						}):start() -- or start()
+					end
+				end,
 			})
 		end,
 	},
