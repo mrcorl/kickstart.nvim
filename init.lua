@@ -199,7 +199,27 @@ vim.keymap.set("n", "<leader>q", vim.diagnostic.setloclist, { desc = "Open diagn
 vim.keymap.set("n", "<space>mg", ":CMakeGenerate -G Ninja<CR>", { desc = "CMake - generate" })
 vim.keymap.set("n", "<space>mb", ":CMakeBuild<CR>", { desc = "CMake - build" })
 vim.keymap.set("n", "<space>mr", ":CMakeRun<CR>", { desc = "CMake - run" })
-vim.keymap.set("n", "<space>md", ":CMakeDebug<CR>", { desc = "CMake - debug" })
+vim.keymap.set("n", "<space>md", function()
+	local cmake = require("cmake-tools")
+	vim.schedule(function()
+		local config = cmake.get_config()
+		local model = config:get_code_model_info()[cmake.get_launch_target()]
+		local result = config:get_launch_target_from_info(model)
+		local target_path = result.data
+		local handle = require("fidget").progress.handle.create({
+			title = "Debugging: " .. cmake.get_launch_target(),
+			lsp_client = { name = "remedybg" },
+		})
+		local Job = require("plenary.job")
+		Job:new({
+			command = "remedybg",
+			args = { "-g", target_path },
+			on_exit = function()
+				handle:finish()
+			end,
+		}):start()
+	end)
+end, { desc = "CMake - debug" })
 vim.keymap.set("n", "<space>mt", ":CMakeSelectBuildTarget<CR>", { desc = "CMake - select build target" })
 
 -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
@@ -226,15 +246,6 @@ vim.keymap.set("n", "<C-j>", "<C-w><C-j>", { desc = "Move focus to the lower win
 vim.keymap.set("n", "<C-k>", "<C-w><C-k>", { desc = "Move focus to the upper window" })
 
 vim.keymap.set("x", "<leader>p", '"_dP')
-vim.keymap.set("n", "<leader>du", function()
-	require("dapui").toggle()
-end, { desc = "Debug - open UI" })
-
-vim.keymap.set("n", "<C-F5>", ":DapContinue<CR>", { desc = "Debug - continue" })
-vim.keymap.set("n", "<C-F9>", ":DapToggleBreakpoint<CR>", { desc = "Debug - breakpoint" })
-vim.keymap.set("n", "<C-F10>", ":DapStepOver<CR>", { desc = "Debug - step over" })
-vim.keymap.set("n", "<C-F11>", ":DapStepInto<CR>", { desc = "Debug - step into" })
-vim.keymap.set("n", "<S-F11>", ":DapStepOut<CR>", { desc = "Debug - step out" })
 
 -- [[ Basic Autocommands ]]
 --  See `:help lua-guide-autocommands`
@@ -454,18 +465,9 @@ require("lazy").setup({
 		branch = "0.1.x",
 		dependencies = {
 			"nvim-lua/plenary.nvim",
-			{ -- If encountering errors, see telescope-fzf-native README for installation instructions
+			{
 				"nvim-telescope/telescope-fzf-native.nvim",
-
-				-- `build` is used to run some command when the plugin is installed/updated.
-				-- This is only run then, not every time Neovim starts up.
-				build = "make",
-
-				-- `cond` is a condition used to determine whether this plugin should be
-				-- installed and loaded.
-				cond = function()
-					return vim.fn.executable("make") == 1
-				end,
+				build = "cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=Release && cmake --build build --config Release && cmake --install build --prefix build",
 			},
 			{ "nvim-telescope/telescope-ui-select.nvim" },
 			{ "nvim-telescope/telescope-file-browser.nvim" },
@@ -495,7 +497,9 @@ require("lazy").setup({
 
 			-- [[ Configure Telescope ]]
 			-- See `:help telescope` and `:help telescope.setup()`
-			require("telescope").setup({
+			local telescope = require("telescope")
+			local telescope_builtin = require("telescope.builtin")
+			telescope.setup({
 				-- You can put your default mappings / updates / etc. in here
 				--  All the info you're looking for is in `:help telescope.setup()`
 				--
@@ -504,7 +508,6 @@ require("lazy").setup({
 				--     i = { ['<c-enter>'] = 'to_fuzzy_refine' },
 				--   },
 				-- },
-				-- pickers = {}
 				extensions = {
 					["ui-select"] = {
 						require("telescope.themes").get_dropdown(),
@@ -512,26 +515,30 @@ require("lazy").setup({
 				},
 			})
 			-- Enable Telescope extensions if they are installed
-			pcall(require("telescope").load_extension, "fzf")
-			pcall(require("telescope").load_extension, "ui-select")
+			telescope.load_extension("fzf")
+			pcall(telescope.load_extension, "ui-select")
 
 			-- See `:help telescope.builtin`
-			local builtin = require("telescope.builtin")
-			vim.keymap.set("n", "<leader>sh", builtin.help_tags, { desc = "[S]earch [H]elp" })
-			vim.keymap.set("n", "<leader>sk", builtin.keymaps, { desc = "[S]earch [K]eymaps" })
-			vim.keymap.set("n", "<leader>sf", builtin.find_files, { desc = "[S]earch [F]iles" })
-			vim.keymap.set("n", "<leader>ss", builtin.builtin, { desc = "[S]earch [S]elect Telescope" })
-			vim.keymap.set("n", "<leader>sw", builtin.grep_string, { desc = "[S]earch current [W]ord" })
-			vim.keymap.set("n", "<leader>sg", builtin.live_grep, { desc = "[S]earch by [G]rep" })
-			vim.keymap.set("n", "<leader>sd", builtin.diagnostics, { desc = "[S]earch [D]iagnostics" })
-			vim.keymap.set("n", "<leader>sr", builtin.resume, { desc = "[S]earch [R]esume" })
-			vim.keymap.set("n", "<leader>s.", builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
+			vim.keymap.set("n", "<leader>sh", telescope_builtin.help_tags, { desc = "[S]earch [H]elp" })
+			vim.keymap.set("n", "<leader>sk", telescope_builtin.keymaps, { desc = "[S]earch [K]eymaps" })
+			vim.keymap.set("n", "<leader>sf", telescope_builtin.find_files, { desc = "[S]earch [F]iles" })
+			vim.keymap.set("n", "<leader>ss", telescope_builtin.builtin, { desc = "[S]earch [S]elect Telescope" })
+			vim.keymap.set("n", "<leader>sw", telescope_builtin.grep_string, { desc = "[S]earch current [W]ord" })
+			vim.keymap.set("n", "<leader>sg", telescope_builtin.live_grep, { desc = "[S]earch by [G]rep" })
+			vim.keymap.set("n", "<leader>sd", telescope_builtin.diagnostics, { desc = "[S]earch [D]iagnostics" })
+			vim.keymap.set("n", "<leader>sr", telescope_builtin.resume, { desc = "[S]earch [R]esume" })
+			vim.keymap.set(
+				"n",
+				"<leader>s.",
+				telescope_builtin.oldfiles,
+				{ desc = '[S]earch Recent Files ("." for repeat)' }
+			)
 			--vim.keymap.set("n", "<leader><leader>", builtin.buffers, { desc = "[ ] Find existing buffers" })
 
 			-- Slightly advanced example of overriding default behavior and theme
 			vim.keymap.set("n", "<leader>/", function()
 				-- You can pass additional configuration to Telescope to change the theme, layout, etc.
-				builtin.current_buffer_fuzzy_find(require("telescope.themes").get_dropdown({
+				telescope_builtin.current_buffer_fuzzy_find(require("telescope.themes").get_dropdown({
 					winblend = 10,
 					previewer = false,
 				}))
@@ -540,7 +547,7 @@ require("lazy").setup({
 			-- It's also possible to pass additional configuration options.
 			--  See `:help telescope.builtin.live_grep()` for information about particular keys
 			vim.keymap.set("n", "<leader>s/", function()
-				builtin.live_grep({
+				telescope_builtin.live_grep({
 					grep_open_files = true,
 					prompt_title = "Live Grep in Open Files",
 				})
@@ -548,7 +555,7 @@ require("lazy").setup({
 
 			-- Shortcut for searching your Neovim configuration files
 			vim.keymap.set("n", "<leader>sn", function()
-				builtin.find_files({ cwd = vim.fn.stdpath("config") })
+				telescope_builtin.find_files({ cwd = vim.fn.stdpath("config") })
 			end, { desc = "[S]earch [N]eovim files" })
 		end,
 	},
@@ -612,14 +619,6 @@ require("lazy").setup({
 			{ "folke/neodev.nvim", opts = {} },
 		},
 		config = function()
-			--[[	require("lspconfig").clangd.setup({
-				on_new_config = function(new_config, new_cwd)
-					local status, cmake = pcall(require, "cmake-tools")
-					if status then
-						cmake.clangd_on_new_config(new_config)
-					end
-				end,
-			})]]
 			-- Brief aside: **What is LSP?**
 			--
 			-- LSP is an initialism you've probably heard, but might not understand what it is.
@@ -686,11 +685,11 @@ require("lazy").setup({
 
 					-- Fuzzy find all the symbols in your current workspace.
 					--  Similar to document symbols, except searches over your entire project.
-					map(
-						"<leader>ws",
-						require("telescope.builtin").lsp_dynamic_workspace_symbols,
-						"[W]orkspace [S]ymbols"
-					)
+					map("<leader>ws", function()
+						require("telescope.builtin").lsp_dynamic_workspace_symbols({
+							sorter = require("telescope").extensions.fzf.native_fzf_sorter(),
+						})
+					end, "[W]orkspace [S]ymbols")
 
 					-- Rename the variable under your cursor.
 					--  Most Language Servers support renaming across files, etc.
@@ -832,37 +831,7 @@ require("lazy").setup({
 			})
 		end,
 	},
-	{
-		"rcarriga/nvim-dap-ui",
-		dependencies = {
-			{
-				"mfussenegger/nvim-dap",
-				config = function()
-					local dap = require("dap")
-					dap.adapters.codelldb = {
-						type = "server",
-						host = "127.0.0.1",
-						port = 13000, -- 💀 Use the port printed out or specified with `--port`
-					}
-					dap.adapters.codelldb = {
-						type = "server",
-						port = "${port}",
-						executable = {
-							-- CHANGE THIS to your path!
-							command = "D:\\Downloads\\codelldb-x86_64-windows\\extension\\adapter\\codelldb",
-							args = { "--port", "${port}" },
-
-							-- On windows you may have to uncomment this:
-							--detached = false,
-						},
-					}
-					local dapui = require("dapui")
-					dapui.setup()
-				end,
-			},
-			"nvim-neotest/nvim-nio",
-		},
-	},
+	"nvim-neotest/nvim-nio",
 	{ -- Autoformat
 		"stevearc/conform.nvim",
 		lazy = false,
@@ -1094,6 +1063,13 @@ require("lazy").setup({
 				additional_vim_regex_highlighting = { "ruby" },
 			},
 			indent = { enable = true, disable = { "ruby" } },
+			incremental_selection = {
+				enable = true,
+				keymaps = {
+					node_incremental = "v",
+					node_decremental = "V",
+				},
+			},
 		},
 		config = function(_, opts)
 			-- [[ Configure Treesitter ]] See `:help nvim-treesitter`
